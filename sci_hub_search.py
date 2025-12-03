@@ -4,17 +4,19 @@ import os
 import urllib3
 import requests
 
-# 禁用 HTTPS 证书验证警告
+# Disable HTTPS certificate verification warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def create_scihub_instance():
-    """创建 SciHub 实例并配置"""
+    """Create and configure a SciHub instance"""
     sh = SciHub()
-    sh.timeout = 30  # 增加超时时间到 30 秒
+    # Use working Sci-Hub domain (domains change frequently)
+    sh.available_base_url_list = ["sci-hub.se"]
+    sh.current_base_url_index = 0
     return sh
 
 def search_paper_by_doi(doi):
-    """通过 DOI 在 Sci-Hub 上搜索论文"""
+    """Search for a paper on Sci-Hub by DOI"""
     sh = create_scihub_instance()
     try:
         result = sh.fetch(doi)
@@ -27,16 +29,16 @@ def search_paper_by_doi(doi):
             'year': result.get('year', '')
         }
     except Exception as e:
-        print(f"搜索出错: {str(e)}")
+        print(f"Search error: {str(e)}")
         return {
             'doi': doi,
             'status': 'not_found'
         }
 
 def search_paper_by_title(title):
-    """通过标题在 Sci-Hub 上搜索论文"""
-    # 由于 SciHub 包不支持 search 方法，我们改用 DOI 搜索
-    # 首先尝试从 CrossRef 获取 DOI
+    """Search for a paper on Sci-Hub by title"""
+    # Since the SciHub package doesn't support direct search, we use DOI search
+    # First try to get the DOI from CrossRef
     try:
         url = f"https://api.crossref.org/works?query.title={title}&rows=1"
         response = requests.get(url)
@@ -46,7 +48,7 @@ def search_paper_by_title(title):
                 doi = data['message']['items'][0]['DOI']
                 return search_paper_by_doi(doi)
     except Exception as e:
-        print(f"CrossRef 搜索出错: {str(e)}")
+        print(f"CrossRef search error: {str(e)}")
     
     return {
         'title': title,
@@ -54,8 +56,8 @@ def search_paper_by_title(title):
     }
 
 def search_papers_by_keyword(keyword, num_results=10):
-    """通过关键词搜索论文，返回元数据列表"""
-    # 使用 CrossRef API 进行搜索
+    """Search for papers by keyword, returns a list of metadata"""
+    # Use CrossRef API for searching
     papers = []
     try:
         url = f"https://api.crossref.org/works?query={keyword}&rows={num_results}"
@@ -69,68 +71,68 @@ def search_papers_by_keyword(keyword, num_results=10):
                     if result['status'] == 'success':
                         papers.append(result)
     except Exception as e:
-        print(f"搜索出错: {str(e)}")
+        print(f"Search error: {str(e)}")
     
     return papers
 
 def download_paper(pdf_url, output_path):
-    """下载论文 PDF"""
+    """Download paper PDF"""
     sh = SciHub()
     try:
         sh.download(pdf_url, output_path)
         return True
     except Exception as e:
-        print(f"下载出错: {str(e)}")
+        print(f"Download error: {str(e)}")
         return False
 
 
 if __name__ == "__main__":
-    print("Sci-Hub 论文搜索测试\n")
+    print("Sci-Hub Paper Search Test\n")
 
-    # 1. DOI 搜索测试
-    print("1. 通过 DOI 搜索论文")
-    test_doi = "10.1002/jcad.12075"  # 一篇神经科学相关的论文
+    # 1. DOI search test
+    print("1. Search paper by DOI")
+    test_doi = "10.1002/jcad.12075"  # A neuroscience-related paper
     result = search_paper_by_doi(test_doi)
     
     if result['status'] == 'success':
-        print(f"标题: {result['title']}")
-        print(f"作者: {result['author']}")
-        print(f"年份: {result['year']}")
+        print(f"Title: {result['title']}")
+        print(f"Author: {result['author']}")
+        print(f"Year: {result['year']}")
         print(f"PDF URL: {result['pdf_url']}")
-        
-        # 尝试下载论文
+
+        # Try to download the paper
         output_file = f"paper_{test_doi.replace('/', '_')}.pdf"
         if download_paper(result['pdf_url'], output_file):
-            print(f"论文已下载到: {output_file}")
+            print(f"Paper downloaded to: {output_file}")
         else:
-            print("论文下载失败")
+            print("Paper download failed")
     else:
-        print(f"未找到 DOI 为 {test_doi} 的论文")
+        print(f"Paper with DOI {test_doi} not found")
 
-    # 2. 标题搜索测试
-    print("\n2. 通过标题搜索论文")
+    # 2. Title search test
+    print("\n2. Search paper by title")
     test_title = "Choosing Assessment Instruments for Posttraumatic Stress Disorder Screening and Outcome Research"
     result = search_paper_by_title(test_title)
     
     if result['status'] == 'success':
         print(f"DOI: {result['doi']}")
-        print(f"作者: {result['author']}")
-        print(f"年份: {result['year']}")
+        print(f"Author: {result['author']}")
+        print(f"Year: {result['year']}")
         print(f"PDF URL: {result['pdf_url']}")
     else:
-        print(f"未找到标题为 '{test_title}' 的论文")
+        print(f"Paper with title '{test_title}' not found")
 
-    # 3. 关键词搜索测试
-    print("\n3. 通过关键词搜索论文")
+    # 3. Keyword search test
+    print("\n3. Search papers by keyword")
     test_keyword = "artificial intelligence medicine 2023"
     papers = search_papers_by_keyword(test_keyword, num_results=3)
     
     for i, paper in enumerate(papers, 1):
-        print(f"\n论文 {i}:")
-        print(f"标题: {paper['title']}")
+        print(f"\nPaper {i}:")
+        print(f"Title: {paper['title']}")
         print(f"DOI: {paper['doi']}")
-        print(f"作者: {paper['author']}")
-        print(f"年份: {paper['year']}")
+        print(f"Author: {paper['author']}")
+        print(f"Year: {paper['year']}")
         if paper.get('pdf_url'):
             print(f"PDF URL: {paper['pdf_url']}")
 
