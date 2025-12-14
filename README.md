@@ -25,7 +25,7 @@ The Sci-Hub MCP Server provides a bridge between AI assistants and Sci-Hub's rep
 
 1. Clone the repository:
    ```
-   git clone https://github.com/JackKuo666/Sci-Hub-MCP-Server.git
+   git clone https://github.com/domtisdell/Sci-Hub-MCP-Server.git
    cd Sci-Hub-MCP-Server
    ```
 
@@ -126,6 +126,7 @@ Can you show me the metadata for the paper with DOI 10.1038/nature09492?
 
 - `sci_hub_server.py`: The main MCP server implementation using FastMCP
 - `sci_hub_search.py`: Contains the logic for searching Sci-Hub and retrieving paper information
+- `scihub_patched.py`: Patched version of the scihub library with fixes for current Sci-Hub layout
 
 ## 🔧 Dependencies
 
@@ -133,7 +134,17 @@ Can you show me the metadata for the paper with DOI 10.1038/nature09492?
 - FastMCP
 - requests
 - bs4
-- scihub
+- retrying
+
+## 🔄 Patched Sci-Hub Library
+
+This fork includes a patched version of the scihub library (`scihub_patched.py`) with the following fixes:
+
+1. **Updated mirror list**: Uses working mirrors (`sci-hub.se`, `sci-hub.ru`) instead of blocked ones
+2. **`<object>` tag support**: Sci-Hub now uses `<object type="application/pdf">` instead of `<iframe>` - the patched version handles both
+3. **Increased ping timeout**: Changed from 1s to 10s for better reliability with slow mirrors
+
+These changes ensure the server works with Sci-Hub's December 2024 layout.
 
 ## 🤝 Contributing
 

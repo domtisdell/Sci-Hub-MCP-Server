@@ -1,4 +1,8 @@
-from scihub import SciHub
+# Use local patched version instead of pip-installed scihub package
+# Patched to support: 1) Updated mirrors (sci-hub.se, sci-hub.ru)
+#                     2) <object> tag parsing (new Sci-Hub layout)
+#                     3) Increased ping timeout (10s)
+from scihub_patched import SciHub
 import re
 import os
 import urllib3
