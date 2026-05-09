@@ -23,12 +23,14 @@ async def search_scihub_by_doi(doi: str) -> Dict[str, Any]:
 
     Returns:
         Dict[str, Any]: Dictionary containing paper information including:
-            - title: The title of the paper
-            - author: The author(s) of the paper
-            - year: Publication year
+            - title: The title of the paper (best-effort, sourced from Crossref)
+            - author: The author(s) of the paper (best-effort, sourced from Crossref)
+            - year: Publication year (best-effort, sourced from Crossref)
             - pdf_url: URL to download the PDF if available
             - status: Success or error status
             - error: Error message if search failed
+            - metadata_warning: Optional. Present when Crossref lookup failed
+              or the DOI is not indexed; PDF is still returned successfully.
     """
     try:
         result = await asyncio.to_thread(search_paper_by_doi, doi)
@@ -48,12 +50,22 @@ async def search_scihub_by_title(title: str) -> Dict[str, Any]:
 
     Returns:
         Dict[str, Any]: Dictionary containing paper information including:
-            - title: The title of the paper
-            - author: The author(s) of the paper
-            - year: Publication year
+            - title: The title of the paper (best-effort, sourced from Crossref)
+            - author: The author(s) of the paper (best-effort, sourced from Crossref)
+            - year: Publication year (best-effort, sourced from Crossref)
             - pdf_url: URL to download the PDF if available
             - status: Success or error status
             - error: Error message if search failed
+            - metadata_warning: Optional. Present when Crossref lookup failed
+              or the DOI is not indexed; PDF is still returned successfully.
+            - reason: Optional. Explanation when status='not_found'
+              (e.g., 'no high-confidence title match', 'crossref returned no results',
+              'matched Crossref entry not available on Sci-Hub').
+            - candidates: Optional. Top 3 Crossref hits with title-similarity scores
+              when no candidate passed the threshold (helps debug ambiguous queries).
+            - match_score: Optional. Title-similarity score [0.0-1.0] of the matched
+              Crossref entry, present when a high-confidence match was found but
+              Sci-Hub fetch subsequently failed.
     """
     try:
         result = await asyncio.to_thread(search_paper_by_title, title)
@@ -75,13 +87,17 @@ async def search_scihub_by_keyword(keyword: str, num_results: int = 10) -> List[
 
     Returns:
         List[Dict[str, Any]]: A list of dictionaries, each containing information about a paper:
-            - title: The title of the paper
-            - author: The author(s) of the paper
-            - year: Publication year
+            - title: The title of the paper (best-effort, sourced from Crossref)
+            - author: The author(s) of the paper (best-effort, sourced from Crossref)
+            - year: Publication year (best-effort, sourced from Crossref)
             - doi: Digital Object Identifier if available
-            - pdf_url: URL to download the PDF if available
-            - status: Success or error status
+            - pdf_url: URL to download the PDF, or None for not_found entries
+            - status: 'success' (PDF available) or 'not_found' (paper exists in
+              Crossref but isn't fetchable from Sci-Hub)
+            - reason: Optional. 'not available on Sci-Hub' for not_found entries
             - error: Error message if search failed
+            - metadata_warning: Optional. Present when Crossref lookup failed
+              or the DOI is not indexed; PDF is still returned successfully.
     """
     try:
         results = await asyncio.to_thread(search_papers_by_keyword, keyword, num_results)
@@ -129,12 +145,14 @@ async def get_paper_metadata(doi: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Dictionary containing paper metadata including:
             - doi: The DOI of the paper
-            - title: The title of the paper
-            - author: The author(s) of the paper
-            - year: Publication year
+            - title: The title of the paper (best-effort, sourced from Crossref)
+            - author: The author(s) of the paper (best-effort, sourced from Crossref)
+            - year: Publication year (best-effort, sourced from Crossref)
             - pdf_url: URL to download the PDF if available
             - status: Success or error status
             - error: Error message if retrieval failed
+            - metadata_warning: Optional. Present when Crossref lookup failed
+              or the DOI is not indexed; PDF is still returned successfully.
     """
     try:
         # First search for the paper by DOI
@@ -142,7 +160,7 @@ async def get_paper_metadata(doi: str) -> Dict[str, Any]:
         
         if paper_info.get('status') == 'success':
             # Extract and return metadata
-            return {
+            response = {
                 'doi': doi,
                 'title': paper_info.get('title', ''),
                 'author': paper_info.get('author', ''),
@@ -150,6 +168,9 @@ async def get_paper_metadata(doi: str) -> Dict[str, Any]:
                 'pdf_url': paper_info.get('pdf_url', ''),
                 'status': 'success'
             }
+            if 'metadata_warning' in paper_info:
+                response['metadata_warning'] = paper_info['metadata_warning']
+            return response
         else:
             return {"error": f"Could not find metadata for paper with DOI {doi}"}
     except Exception as e:

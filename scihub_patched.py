@@ -7,7 +7,12 @@ import os
 
 import requests
 from bs4 import BeautifulSoup
-from retrying import retry
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_random,
+    retry_if_not_exception_type,
+)
 
 # log config
 logging.basicConfig()
@@ -19,12 +24,26 @@ RETRY_TIMES = 3
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
+
 AVAILABLE_SCIHUB_BASE_URL = [
-    "sci-hub.se",
-    "sci-hub.st",
-    "sci-hub.ru",
-    "sci-hub.ren",
+    "sci-hub.al",     # CDN-fronted (sci.bban.top), ~150-500ms, no anti-bot gate
+    "sci-hub.mk",     # same as .al — identical layout and CDN
+    "sci-hub.ru",     # ddos-guard but session-friendly; primary fallback
+    "sci-hub.st",     # ddos-guard, equivalent to .ru
+    "sci-hub.ren",    # Cloudflare; backup
+    "sci-hub.ee",     # Cloudflare; backup
 ]
+
+
+class NoMoreMirrorsException(Exception):
+    """Raised by _change_base_url when all mirrors in the list are exhausted.
+
+    The @retry decorator on fetch() short-circuits on this via
+    retry_if_not_exception_type so retries don't waste attempts trying to
+    access an out-of-bounds index. Defined before SciHub because
+    retry_if_not_exception_type resolves its argument at decorator time.
+    """
+    pass
 
 
 class SciHub(object):
@@ -36,7 +55,6 @@ class SciHub(object):
         self.session = requests.Session()
         self.session.headers = HEADERS
         self.available_base_url_list = AVAILABLE_SCIHUB_BASE_URL
-        self.captcha_url = None
         self.tries = 0
         self.current_base_url_index = 0
 
@@ -57,21 +75,26 @@ class SciHub(object):
         )
 
     def _change_base_url(self):
+        """Advance to the next mirror in the list.
+
+        Raises NoMoreMirrorsException BEFORE incrementing past the end so the
+        instance is never left in an out-of-bounds state. The @retry predicate
+        on fetch() catches this and stops retrying.
+        """
+        if self.current_base_url_index + 1 >= len(self.available_base_url_list):
+            raise NoMoreMirrorsException(
+                "Exhausted all {0} sci-hub mirrors".format(
+                    len(self.available_base_url_list)))
         self.current_base_url_index += 1
-
-        if self.current_base_url_index >= len(self.available_base_url_list):
-            raise Exception("No more scihub urls available, none are working")
-
         logger.info(
             "Changing to {0}".format(
-                self.available_base_url_list[self.current_base_url_index]
-            )
-        )
+                self.available_base_url_list[self.current_base_url_index]))
 
     @retry(
-        wait_random_min=100,
-        wait_random_max=1000,
-        stop_max_attempt_number=RETRY_TIMES
+        wait=wait_random(min=0.1, max=1.0),
+        stop=stop_after_attempt(RETRY_TIMES),
+        retry=retry_if_not_exception_type(NoMoreMirrorsException),
+        reraise=True,
     )
     def fetch(self, identifier):
         """
@@ -103,46 +126,48 @@ class SciHub(object):
             # and verifying would work. will fix this later.
             res = self.session.get(url, verify=False)
 
-            if res.headers['Content-Type'] != 'application/pdf':
-                self._set_captcha_url(url)
-                self._change_base_url()
+            if res.headers.get('Content-Type', '') != 'application/pdf':
                 logger.error('CAPTCHA needed')
+                # Rotate so the retry hits a different mirror. Swallow exhaustion
+                # here — we still want to raise the captcha error to the caller.
+                try:
+                    self._change_base_url()
+                except NoMoreMirrorsException:
+                    pass
                 raise CaptchaNeededException(
-                    'Failed to fetch pdf with identifier {0}'
-                    '(resolved url {1}) due to captcha'.format(identifier, url)
-                )
-            else:
-                return {
-                    'pdf': res.content,
-                    'url': url
-                }
+                    'Failed to fetch pdf with identifier {0} '
+                    '(resolved url {1}) due to captcha'.format(identifier, url))
+            return {'pdf': res.content, 'url': url}
+
+        except CaptchaNeededException:
+            # Already rotated above; just propagate.
+            raise
 
         except requests.exceptions.ConnectionError:
-            logger.error(
-                '{0} cannot acess,changing'.format(
-                    self.available_base_url_list[0]
-                )
-            )
+            current = self.available_base_url_list[self.current_base_url_index]
+            logger.error('{0} cannot access, changing'.format(current))
+            # Rotate then re-raise so @retry fires on a different mirror.
+            # If exhausted, NoMoreMirrorsException propagates (retry predicate stops).
             self._change_base_url()
+            raise
 
         except requests.exceptions.RequestException as e:
-            return dict(
-                err='Failed to fetch pdf with identifier %s '
-                    '(resolved url %s) due to request exception.' % (
-                        identifier, url
-                    )
-            )
-
-        except:
+            # Other request errors (timeout, SSL, etc.) — same pattern.
             self._change_base_url()
-            raise Exception("Something happened")
+            raise Exception(
+                'Failed to fetch pdf with identifier {0} '
+                '(resolved url {1}) due to request exception: {2}'.format(
+                    identifier, url, e))
 
+        except Exception:
+            # Catch-all for any other failure: rotate and re-raise the original
+            # exception so @retry can fire on a new mirror.
+            try:
+                self._change_base_url()
+            except NoMoreMirrorsException:
+                pass
+            raise
 
-    def _set_captcha_url(self, url):
-        self.captcha_url = url
-
-    def get_captcha_url(self):
-        return self.captcha_url
 
     def _get_direct_url(self, identifier):
         """
@@ -191,6 +216,17 @@ class SciHub(object):
             elif data_url.startswith('//'):
                 return 'https:' + data_url
             return data_url
+
+        # Also check for <embed> tag (sci-hub.al, sci-hub.mk layout — CDN-fronted via sci.bban.top)
+        embed_tag = s.find('embed', {'type': 'application/pdf'})
+        if embed_tag and embed_tag.get('src'):
+            logger.info('embed tag found in scihub html')
+            src = embed_tag.get('src').split('#')[0]
+            if src.startswith('/'):
+                return self.base_url.rstrip('/') + src
+            elif src.startswith('//'):
+                return 'https:' + src
+            return src
 
     def _classify(self, identifier):
         """
