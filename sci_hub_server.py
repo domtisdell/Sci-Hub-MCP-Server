@@ -2,7 +2,7 @@ from typing import Any, List, Dict, Optional, Union
 import asyncio
 import logging
 from mcp.server.fastmcp import FastMCP
-from sci_hub_search import search_paper_by_doi, search_paper_by_title, search_papers_by_keyword, download_paper
+from sci_hub_search import search_paper_by_doi, search_paper_by_title, search_paper_by_title_via_openalex, search_papers_by_keyword, download_paper
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -72,6 +72,37 @@ async def search_scihub_by_title(title: str) -> Dict[str, Any]:
         return result
     except Exception as e:
         return {"error": f"An error occurred while searching by title: {str(e)}"}
+
+@mcp.tool()
+async def search_scihub_by_title_via_openalex(title: str) -> Dict[str, Any]:
+    logging.info(f"Resolving title via OpenAlex, then Sci-Hub: {title}")
+    """
+    Find a paper on Sci-Hub by title, resolving the title to a DOI via OpenAlex
+    first (then fetching by that DOI). Prefer this over search_scihub_by_title
+    for short or generic titles: OpenAlex indexes canonical works, so it avoids
+    the Crossref failure mode where a figure/fragment DOI (e.g.
+    "Figure 7: Long short-term memory.") out-scores the real paper and produces
+    a false not_found. Falls back to the Crossref title path automatically when
+    OpenAlex finds no high-confidence match, so retrieval is never worse.
+
+    Args:
+        title (str): The full or partial title of the academic paper. Complete,
+               distinctive titles yield the most accurate resolution.
+
+    Returns:
+        Dict[str, Any]: Same shape as search_scihub_by_doi (title, author, year,
+            pdf_url, status), plus:
+            - resolved_via: 'openalex' or 'crossref' — which resolver matched.
+            - match_score: Title-similarity [0.0-1.0] of the matched entry.
+            - reason: Explanation when status='not_found'.
+            - candidates / openalex_candidates: Top hits with scores when no
+              candidate passed the confidence threshold (debug aid).
+    """
+    try:
+        result = await asyncio.to_thread(search_paper_by_title_via_openalex, title)
+        return result
+    except Exception as e:
+        return {"error": f"An error occurred while resolving title via OpenAlex: {str(e)}"}
 
 @mcp.tool()
 async def search_scihub_by_keyword(keyword: str, num_results: int = 10) -> List[Dict[str, Any]]:

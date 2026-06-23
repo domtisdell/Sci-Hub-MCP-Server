@@ -10,6 +10,7 @@ The Sci-Hub MCP Server provides a bridge between AI assistants and Sci-Hub's rep
 
 - 🔎 Paper Search by DOI: Find papers using their Digital Object Identifier ✅
 - 🔍 Paper Search by Title: Locate papers using their full or partial title ✅
+- 🎯 Paper Search by Title via OpenAlex: Resolve a title to its canonical DOI through OpenAlex before fetching — more robust for short/generic titles ✅
 - 🔑 Paper Search by Keyword: Discover papers related to specific research areas ✅
 - 📊 Metadata Access: Retrieve detailed metadata for specific papers ✅
 - 📄 PDF Download: Download full-text PDF content when available ✅
@@ -82,10 +83,11 @@ Add this configuration to your `claude_desktop_config.json`:
 The Sci-Hub MCP Server provides the following tools:
 
 1. `search_scihub_by_doi`: Search for a paper on Sci-Hub using its DOI (Digital Object Identifier).
-2. `search_scihub_by_title`: Search for a paper on Sci-Hub using its title.
-3. `search_scihub_by_keyword`: Search for papers on Sci-Hub using a keyword.
-4. `download_scihub_pdf`: Download a paper PDF from Sci-Hub.
-5. `get_paper_metadata`: Get metadata information for a paper using its DOI.
+2. `search_scihub_by_title`: Search for a paper on Sci-Hub using its title (Crossref `query.bibliographic` resolution).
+3. `search_scihub_by_title_via_openalex`: Resolve a title to a DOI via OpenAlex first, then fetch by that DOI. Prefer this for short/generic titles — OpenAlex indexes canonical works, avoiding the Crossref failure mode where a figure/fragment DOI (e.g. "Figure 7: Long short-term memory.") out-scores the real paper. Falls back to the Crossref title path automatically, so retrieval is never worse.
+4. `search_scihub_by_keyword`: Search for papers on Sci-Hub using a keyword.
+5. `download_scihub_pdf`: Download a paper PDF from Sci-Hub.
+6. `get_paper_metadata`: Get metadata information for a paper using its DOI.
 
 ### Searching Papers by DOI
 

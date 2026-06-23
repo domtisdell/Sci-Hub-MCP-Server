@@ -170,6 +170,102 @@ def search_paper_by_title(title):
     }
 
 
+# OpenAlex polite pool: a mailto raises limits and improves reliability.
+# Defaults to the Crossref mailto; override with OPENALEX_MAILTO.
+OPENALEX_MAILTO = os.environ.get("OPENALEX_MAILTO", CROSSREF_MAILTO)
+
+
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(0.5), reraise=True)
+def _openalex_title_candidates(title, rows=5):
+    """Resolve a title to ranked DOI candidates via OpenAlex.
+
+    Returns a list of (score, doi, candidate_title, year) sorted by descending
+    title-similarity. Unlike Crossref's query.bibliographic, OpenAlex's
+    title.search filter targets canonical *works*, so it does not surface
+    figure/fragment DOIs (e.g. 'Figure 7: Long short-term memory.') that can
+    out-score the real paper. Returns [] on non-200 or no DOI-bearing results.
+
+    Commas and pipes are stripped from the query: in an OpenAlex filter value a
+    comma means AND and a pipe means OR, so an unsanitized title would break the
+    filter. title.search is a stemmed token match, so dropping punctuation is safe.
+    """
+    safe = re.sub(r'\s+', ' ', re.sub(r'[,|]+', ' ', title or '')).strip()
+    if not safe:
+        return []
+    url = "https://api.openalex.org/works"
+    params = {
+        'filter': f'title.search:{safe}',
+        'per_page': rows,
+        'mailto': OPENALEX_MAILTO,
+        'select': 'id,doi,title,publication_year',
+    }
+    r = requests.get(url, headers=CROSSREF_HEADERS, params=params, timeout=10)
+    if r.status_code != 200:
+        return []
+    out = []
+    for w in r.json().get('results', []) or []:
+        doi_url = w.get('doi')
+        if not doi_url:
+            continue  # OpenAlex work without a DOI — nothing to fetch from Sci-Hub
+        doi = re.sub(r'^https?://doi\.org/', '', doi_url, flags=re.IGNORECASE)
+        cand_title = w.get('title') or ''
+        out.append((_score_title_match(title, cand_title), doi, cand_title,
+                    w.get('publication_year')))
+    out.sort(key=lambda x: x[0], reverse=True)
+    return out
+
+
+def search_paper_by_title_via_openalex(title, fallback_to_crossref=True):
+    """Resolve title -> DOI via OpenAlex, then fetch from Sci-Hub by that DOI.
+
+    OpenAlex indexes canonical works rather than figure/fragment DOIs, so this
+    avoids the Crossref title-search failure mode where the wrong entry wins on
+    similarity. Applies the same 0.65 similarity gate as the Crossref path. When
+    OpenAlex yields no high-confidence match it falls back to the Crossref title
+    path (so recall is never worse than search_paper_by_title), tagging the
+    winning resolver in `resolved_via`.
+    """
+    SIM_THRESHOLD = 0.65
+    candidates = []
+    try:
+        candidates = _openalex_title_candidates(title)
+        if candidates and candidates[0][0] >= SIM_THRESHOLD:
+            score, doi, cand_title, _year = candidates[0]
+            result = search_paper_by_doi(doi)
+            result['resolved_via'] = 'openalex'
+            result['match_score'] = round(score, 3)
+            if result.get('status') != 'success':
+                # High-confidence OpenAlex match, but Sci-Hub lacks the PDF.
+                result['title'] = result.get('title') or cand_title
+                result['reason'] = 'matched OpenAlex entry not available on Sci-Hub'
+            return result
+    except Exception as e:
+        print(f"OpenAlex search error: {str(e)}")
+
+    # No high-confidence OpenAlex match. Fall back to the Crossref title path so
+    # this tool is never strictly worse at retrieval than search_scihub_by_title.
+    if fallback_to_crossref:
+        fb = search_paper_by_title(title)
+        fb['resolved_via'] = 'crossref'
+        if fb.get('status') != 'success' and candidates:
+            # Surface what OpenAlex saw to aid debugging ambiguous queries.
+            fb['openalex_candidates'] = [
+                {'doi': d, 'title': t, 'score': round(s, 3), 'year': y}
+                for s, d, t, y in candidates[:3]
+            ]
+        return fb
+
+    return {
+        'title': title,
+        'status': 'not_found',
+        'resolved_via': 'openalex',
+        'reason': 'no high-confidence OpenAlex title match' if candidates
+                  else 'openalex returned no results',
+        'candidates': [{'doi': d, 'title': t, 'score': round(s, 3), 'year': y}
+                       for s, d, t, y in candidates[:3]],
+    }
+
+
 def search_papers_by_keyword(keyword, num_results=10):
     """Search papers by keyword. Returns a list of dicts with mixed status.
 
@@ -310,6 +406,20 @@ if __name__ == "__main__":
         assert 'reason' in result, "missing reason field on not_found"
         print(f"[OK] clean not_found: {result['reason']}")
         print(f"     candidates: {result.get('candidates', [])}")
+
+    # 4b. OpenAlex title resolver — must fix the figure-DOI false negative that
+    # the Crossref path hits on short titles (regression for "Long Short-Term
+    # Memory", where Crossref matches "Figure 7: Long short-term memory.").
+    print("\n4b. OpenAlex title resolver test")
+    oa = search_paper_by_title_via_openalex("Long Short-Term Memory")
+    assert oa.get('status') == 'success', \
+        f"OpenAlex resolver failed for LSTM: {oa}"
+    assert oa.get('doi') == '10.1162/neco.1997.9.8.1735', \
+        f"OpenAlex resolved wrong DOI: {oa.get('doi')}"
+    assert oa.get('resolved_via') == 'openalex', \
+        f"expected openalex resolver, got {oa.get('resolved_via')}"
+    print(f"[OK] OpenAlex resolved LSTM to {oa['doi']} "
+          f"(score {oa.get('match_score')}, via {oa['resolved_via']})")
 
     # 5. Download test — must actually write a non-empty PDF
     print("\n5. Download test")
