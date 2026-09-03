@@ -1,6 +1,13 @@
 requests>=2.31.0
 bs4>=0.0.1
-mcp>=0.1.0
+# Pinned below 2.0 on the SDK's own advice. mcp 2.x renamed FastMCP to MCPServer
+# and dropped `mcp.server.fastmcp` -- the import sci_hub_server.py opens with -- so
+# an unpinned install builds a venv that cannot start, with a clean exit code and
+# no warning. Its ModuleNotFoundError says: "pin 'mcp<2' to keep running v1 code".
+# Measured 2026-09-03: `mcp>=0.1.0` resolved to 2.1.1 and failed; 1.29.1 works.
+# Lift this only together with migrating to `from mcp.server.mcpserver import
+# MCPServer` -- see https://py.sdk.modelcontextprotocol.io/v2/migration/
+mcp>=1.9,<2
 scihub
 tenacity>=8.2,<10
 
